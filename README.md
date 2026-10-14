@@ -21,24 +21,28 @@ The premium is measurable before any trade P&L exists. Over 2015–2023, the mod
 VIX options exceeded the variance the VIX future then realized in 83% of monthly cohorts, in every one of nine years.
 It sits in the call wing: the put side mostly diversifies.
 
-## Results (daily-marked, 100 $ of vega per daily entry, 1× costs)
+## Results (daily-marked on every trading day, 100 $ of vega per daily entry, 1× costs)
 
 | | Design window 2015–2023 | Holdout 2024-01 → 2026-09 (read once) | Backcast 2008-07 → 2013 (read once, second vendor) |
 |---|---|---|---|
-| Sharpe, carried book¹ | **1.58** | **1.74** | **0.39** |
+| Sharpe, carried book¹ | **1.45** | **1.65** | **0.39** |
 | Sharpe, frozen original candidate | 0.92 | **1.48** (passed all four registered gates) | 0.37 |
-| Max drawdown, carried book | 1.9 × annual vol | 1.1 × annual vol | 1.6 × annual vol |
-| Luck check, block-bootstrap p-value | 0.0001 | 0.005 | 0.18 |
+| Max drawdown, carried book | 2.0 × annual vol | 1.2 × annual vol | 1.6 × annual vol |
+| Luck check, block-bootstrap p-value | 0.0002 | 0.008 | 0.19 |
 
 ¹ The carried book is the call-heavy strangle with the level gate, at constant size; the vol-of-vol sizing adds about
-0.17 on the design window and nothing on the holdout. It was chosen after the holdout look, so its holdout column is a
-re-read, not a blind test. The
-blind holdout results are the registered candidates: every one was positive, and the frozen candidate passed.
+0.15 on the design window and nothing on the holdout. It was chosen after the holdout look, so its holdout column is a
+re-read, not a blind test. The blind holdout results are the registered candidates: every one was positive, and the
+frozen candidate passed.
+
+*Correction, 2026-10-14: an earlier version of this page scored the gated book on its active days only (1.58 on the
+design window, 1.74 on the holdout). A book that is flat on some days must count those days as zero; every number here
+now does.*
 
 **What the three windows say together:**
 - The premium is real, and it travelled to data nobody had read.
 - It is regime-dependent. A run of back-to-back vol-of-vol shocks (2010–2011) earns almost nothing.
-- A long-run Sharpe near 1 is the fair expectation, not the last decade's 1.6–1.7.
+- A long-run Sharpe near 1 is the fair expectation, not the last decade's 1.5–1.7.
 
 ## Strategy design (what it does; parameters live in the private repository)
 
@@ -64,20 +68,66 @@ blind holdout results are the registered candidates: every one was positive, and
 - **A better hedge is not always a better book.** The smile-adjusted minimum-variance delta hedges every option better,
   but removes a small implicit short-futures position that was earning the VIX futures roll.
 
+## Augmenting the strategy with chairlift
+
+[chairlift](https://github.com/lanteignel93/chairlift_public) is the machine-learning research pipeline behind these
+studies: a cached graph from data to walk-forward folds to fitted models to books, with leakage checks inside each
+fold, a sealed holdout, and every experiment counted in a trial ledger. Once mogul had a baseline that travelled,
+chairlift was pointed at it with one question: **using only what is known at entry, can a model size the daily entries
+better than constant size?**
+
+**The setup.**
+- **Target:** each daily entry's final P&L, delta-hedged, at 100 $ of vega. The full structure, and each leg alone.
+- **Inputs:** 29 values known at entry: the VIX complex, the realized vol of VIX, the futures slope, the legs' implied
+  vols and the smile, the credit, SPX returns and drawdown, scheduled macro releases inside the hold, the weekday.
+- **Fit:** walk-forward on the design window only, refitted each year, with an embargo as long as an entry can live.
+  The holdout stayed sealed.
+- **Use:** a model may only redistribute size. The mean size stays at 1, so it can win only by timing.
+
+**What it found** (test years 2017–2023, so the constant book differs from the 2015–2023 card above):
+
+| | constant size | ridge-sized | gain [99% CI] | test years better |
+|---|---|---|---|---|
+| carried book (with the gate) | 1.57 | 2.04 | +0.46 [−0.24, +1.16] | 4 of 7 |
+| the call wing alone, with the gate | 1.72 | 2.36 | +0.64 [+0.15, +1.18] | 4 of 7 |
+| without the gate | 1.26 | 0.97 | −0.28 [−0.68, +0.49] | 3 of 7 |
+
+- **Without the gate, the models learn the VIX level** and size up into the entries that get stopped. That adds risk,
+  not Sharpe.
+- **Inside the gate, a ridge with stable signs sorts out the entries that get run over.** The stop rate falls from
+  24% in the lowest fifth of predictions to 2% in the highest. It sizes up after an SPX drawdown and when the call wing
+  is rich. It sizes down after a quarter of volatile VIX, after a VIX rise, and when a CPI release falls inside the
+  hold.
+- **Learning the position directly** (a mean-variance policy) was no better. Sizing each leg by its own model gained,
+  and all of the gain came through the call wing.
+- **Searching the trade's own settings** found the family (the gate, a call-heavy structure, a stop) but not a single
+  best setting: the best cell in hindsight does not carry forward (probability of backtest overfitting 0.65).
+
+**The verdict: no ML sizing is adopted.** The gain has the right sign and an economic story, but it holds in only 4 of
+7 test years, the in-sample fit far exceeds the out-of-sample fit, and about 225 books were evaluated to find it. What
+chairlift added is mostly confirmation of what mogul found by hand: the gate, the call-heavy structure, the stop, and
+smaller size in persistent vol-of-vol. If one ML candidate is carried forward, it is the gated call-wing ridge, judged
+once on data it has not seen.
+
+The ML layer itself (the chairlift client, the review of the model and of the pipeline that produced it, the figures)
+is in [mogul_ml_trade_public](https://github.com/lanteignel93/mogul_ml_trade_public).
+
 ## Research protocol
 
 - **One engine,** identity-tested and checked against synthetic markets, used by every notebook.
-- **An append-only event log** of 475 decisions, looks, predictions, quirks and reviews, rendered into ledgers.
+- **An append-only event log** of 513 decisions, looks, predictions, quirks and reviews, rendered into ledgers.
 - **Every look at the data counted** before it was read: about 500 on the design window, deflated Sharpe at the
   running count.
 - **A holdout sealed in code.** Reading it raises an error until a ledger line records who opened it and why. It was
   opened once. A second, earlier window was sealed and opened the same way.
-- **Predictions registered before every run, then scored:** 65 hit, 19 partial, 36 miss.
+- **Predictions registered before every run, then scored:** 70 hit, 20 partial, 43 miss.
 - **Data defects disclosed with their effect:**
   - stale settlement prints in the exchange's own history
   - a vendor greek bias
   - a snapshot-clock dependence of daily stops on spike days
 - **Since the holdout was opened, every design choice is made on the design window only** and re-read afterwards.
+- **Errors in our own reporting are logged like data defects,** with the corrected numbers next to the old ones (the
+  active-day correction above is one).
 
 ## Private repository structure
 
@@ -96,6 +146,7 @@ mogul_trade_private/
 ├── notebooks/ (00–13)       # data QC · carry · engine · anatomy · decomposition ·
 │                            #   structure · candidates · exits · regimes · kill battery ·
 │                            #   comparators · holdout · backcast · sizing/stop · hedge
+├── chairlift_client/        # the ML layer: study, experiments, review of the model and the pipeline
 └── tests/                   # holdout guard, engine identities, data QC, freeze pin
 ```
 
